@@ -35,6 +35,8 @@ CREATE TABLE members (
     full_name       TEXT NOT NULL,
     email           TEXT UNIQUE,
     phone           TEXT NOT NULL,
+    membership_code  TEXT UNIQUE,                       -- e.g., 'MEM-1042' for quick front-desk lookup
+    photo_url       TEXT,                               -- profile photo for staff recognition
     date_of_birth   DATE,
     client_type     TEXT NOT NULL DEFAULT 'individual' CHECK (client_type IN ('individual', 'business')),
     plan_id         UUID REFERENCES plans(id),
@@ -138,6 +140,9 @@ CREATE INDEX idx_bookings_status ON bookings(status);
 CREATE OR REPLACE FUNCTION trg_prevent_double_booking()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
+    v_court_id  UUID;
+    v_start     TIMESTAMPTZ;
+    v_end       TIMESTAMPTZ;
     v_is_social BOOLEAN;
 BEGIN
     -- Only check confirmed bookings
@@ -145,14 +150,23 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- Check if the slot is social
-    SELECT is_social INTO v_is_social FROM court_slots WHERE id = NEW.slot_id;
+    -- Get full slot details (court + time range + social flag)
+    SELECT cs.court_id, cs.start_time, cs.end_time, cs.is_social
+    INTO v_court_id, v_start, v_end, v_is_social
+    FROM court_slots cs WHERE cs.id = NEW.slot_id;
 
-    -- For non-social slots, ensure no other confirmed booking exists
+    -- For non-social slots, ensure no other confirmed booking OVERLAPS
+    -- on the same court (prevents 6:00-7:00 vs 6:30-7:30 clash)
     IF NOT v_is_social THEN
         IF EXISTS (
-            SELECT 1 FROM bookings
-            WHERE slot_id = NEW.slot_id AND status = 'confirmed' AND id != COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::UUID)
+            SELECT 1 FROM bookings b
+            JOIN court_slots cs ON b.slot_id = cs.id
+            WHERE cs.court_id = v_court_id
+              AND b.status = 'confirmed'
+              AND NOT cs.is_social
+              AND b.id != COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::UUID)
+              AND cs.start_time < v_end      -- overlap check: other starts before this ends
+              AND cs.end_time   > v_start    -- overlap check: other ends after this starts
         ) THEN
             RAISE EXCEPTION 'SLOT_TAKEN' USING ERRCODE = 'P0001';
         END IF;
@@ -204,6 +218,9 @@ CREATE TABLE orders (
     channel         TEXT NOT NULL CHECK (channel IN ('in_store', 'online')),
     fulfilment_type TEXT NOT NULL DEFAULT 'immediate' CHECK (fulfilment_type IN ('immediate', 'pickup', 'delivery')),
     delivery_address TEXT,                              -- for delivery orders
+    guest_name      TEXT,                               -- for non-member online orders
+    guest_phone     TEXT,                               -- contact for non-member orders
+    guest_email     TEXT,                               -- contact for non-member orders
     status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'ready', 'fulfilled', 'cancelled')),
     discount_pct    NUMERIC(5,2) NOT NULL DEFAULT 0,    -- snapshot of member discount
     subtotal        NUMERIC(10,2) NOT NULL DEFAULT 0,
@@ -536,11 +553,16 @@ BEGIN
         RAISE EXCEPTION 'SLOT_IN_PAST' USING ERRCODE = 'P0001';
     END IF;
 
-    -- 2. For non-social slots, check no confirmed booking exists
+    -- 2. For non-social slots, check no overlapping confirmed booking on the same court
     IF NOT v_slot.is_social THEN
         IF EXISTS (
-            SELECT 1 FROM bookings
-            WHERE slot_id = p_slot_id AND status = 'confirmed'
+            SELECT 1 FROM bookings b
+            JOIN court_slots cs ON b.slot_id = cs.id
+            WHERE cs.court_id = v_slot.court_id
+              AND b.status = 'confirmed'
+              AND NOT cs.is_social
+              AND cs.start_time < v_slot.end_time
+              AND cs.end_time   > v_slot.start_time
         ) THEN
             RAISE EXCEPTION 'SLOT_TAKEN' USING ERRCODE = 'P0001';
         END IF;
@@ -627,6 +649,9 @@ CREATE OR REPLACE FUNCTION place_shop_order(
     p_channel TEXT DEFAULT 'in_store',
     p_fulfilment_type TEXT DEFAULT 'immediate',
     p_delivery_address TEXT DEFAULT NULL,
+    p_guest_name TEXT DEFAULT NULL,
+    p_guest_phone TEXT DEFAULT NULL,
+    p_guest_email TEXT DEFAULT NULL,
     p_items JSONB DEFAULT '[]',
     p_staff_id UUID DEFAULT NULL
 ) RETURNS UUID LANGUAGE plpgsql AS $$
@@ -653,8 +678,8 @@ BEGIN
     END IF;
 
     -- Create order
-    INSERT INTO orders (member_id, channel, fulfilment_type, delivery_address, discount_pct, placed_by_staff_id)
-    VALUES (p_member_id, p_channel, p_fulfilment_type, p_delivery_address, v_discount_pct, p_staff_id)
+    INSERT INTO orders (member_id, channel, fulfilment_type, delivery_address, guest_name, guest_phone, guest_email, discount_pct, placed_by_staff_id)
+    VALUES (p_member_id, p_channel, p_fulfilment_type, p_delivery_address, p_guest_name, p_guest_phone, p_guest_email, v_discount_pct, p_staff_id)
     RETURNING id INTO v_order_id;
 
     -- Process each item
