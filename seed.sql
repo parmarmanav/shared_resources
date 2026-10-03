@@ -451,8 +451,13 @@ INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, line_t
 
 -- =============================================================================
 -- REAL BOOKINGS — 25 actual court bookings via direct INSERT
--- (using book_court() would be ideal but requires slots to be in the future)
+-- Temporarily disable the overlap trigger for bulk seeding, then re-enable it.
+-- We pick every-other slot (via ROW_NUMBER) so the data itself has no overlaps.
 -- =============================================================================
+
+-- Disable the double-booking trigger during seed inserts
+ALTER TABLE bookings DISABLE TRIGGER trg_bookings_prevent_double;
+
 DO $$
 DECLARE
     v_slot RECORD;
@@ -465,12 +470,14 @@ BEGIN
     -- Booking 1-5: Rahul Sharma (Gold, rate=0) books 5 upcoming Tennis Court 1 slots
     v_member_id := (SELECT id FROM members WHERE email = 'rahul@example.com');
     FOR v_slot IN
-        SELECT cs.id, cs.start_time FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Tennis Court 1'
-          AND cs.start_time > NOW()
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
+        SELECT id, start_time FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Tennis Court 1'
+              AND cs.start_time > NOW()
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
         LIMIT 5
     LOOP
         INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
@@ -482,12 +489,14 @@ BEGIN
     -- Booking 6-8: Priya Patel (Silver, rate=200) books 3 Tennis Court 2 slots
     v_member_id := (SELECT id FROM members WHERE email = 'priya@example.com');
     FOR v_slot IN
-        SELECT cs.id FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Tennis Court 2'
-          AND cs.start_time > NOW()
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
+        SELECT id FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Tennis Court 2'
+              AND cs.start_time > NOW()
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
         LIMIT 3
     LOOP
         INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
@@ -498,12 +507,14 @@ BEGIN
     -- Booking 9-10: Arjun Nair (Junior, rate=100) books 2 Tennis Court 3 slots
     v_member_id := (SELECT id FROM members WHERE email = 'arjun@example.com');
     FOR v_slot IN
-        SELECT cs.id FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Tennis Court 3'
-          AND cs.start_time > NOW()
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
+        SELECT id FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Tennis Court 3'
+              AND cs.start_time > NOW()
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
         LIMIT 2
     LOOP
         INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
@@ -514,12 +525,14 @@ BEGIN
     -- Booking 11-13: Farhan Sheikh (Silver) books Cricket Net 1
     v_member_id := (SELECT id FROM members WHERE email = 'farhan@example.com');
     FOR v_slot IN
-        SELECT cs.id FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Cricket Net 1'
-          AND cs.start_time > NOW()
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
+        SELECT id FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Cricket Net 1'
+              AND cs.start_time > NOW()
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
         LIMIT 3
     LOOP
         INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
@@ -529,12 +542,14 @@ BEGIN
 
     -- Booking 14-15: Walk-in bookings (no member)
     FOR v_slot IN
-        SELECT cs.id FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Tennis Court 3'
-          AND cs.start_time > NOW() + INTERVAL '2 days'
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
+        SELECT id FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Tennis Court 3'
+              AND cs.start_time > NOW() + INTERVAL '2 days'
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
         LIMIT 2
     LOOP
         INSERT INTO bookings (slot_id, walker_name, walker_phone, price_charged, status, booked_by_staff_id)
@@ -544,13 +559,15 @@ BEGIN
 
     -- Booking 16: Trial session walk-in
     FOR v_slot IN
-        SELECT cs.id FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Tennis Court 2'
-          AND cs.start_time > NOW() + INTERVAL '3 days'
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
-        OFFSET 5 LIMIT 1
+        SELECT id FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Tennis Court 2'
+              AND cs.start_time > NOW() + INTERVAL '3 days'
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
+        OFFSET 3 LIMIT 1
     LOOP
         INSERT INTO bookings (slot_id, walker_name, walker_phone, is_trial, price_charged, status, booked_by_staff_id)
         VALUES (v_slot.id, 'Megha (Trial)', '9988776655', TRUE, 0, 'confirmed', v_staff_id)
@@ -560,12 +577,14 @@ BEGIN
     -- Booking 17-18: Cancelled bookings (for realistic data)
     v_member_id := (SELECT id FROM members WHERE email = 'vikash@example.com');
     FOR v_slot IN
-        SELECT cs.id FROM court_slots cs
-        JOIN courts c ON cs.court_id = c.id
-        WHERE c.name = 'Cricket Net 2'
-          AND cs.start_time > NOW() + INTERVAL '1 day'
-          AND cs.is_social = FALSE
-        ORDER BY cs.start_time
+        SELECT id FROM (
+            SELECT cs.id, cs.start_time, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+            FROM court_slots cs
+            JOIN courts c ON cs.court_id = c.id
+            WHERE c.name = 'Cricket Net 2'
+              AND cs.start_time > NOW() + INTERVAL '1 day'
+              AND cs.is_social = FALSE
+        ) sub WHERE rn % 2 = 1
         LIMIT 2
     LOOP
         INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id, cancelled_at)
@@ -590,29 +609,41 @@ BEGIN
         ON CONFLICT DO NOTHING;
     END LOOP;
 
-    -- Booking 23-25: Ananya, Kavitha, Harish book upcoming slots
+    -- Booking 23-25: Ananya, Kavitha, Harish book upcoming slots (non-overlapping)
     INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
-    SELECT cs.id, (SELECT id FROM members WHERE email = 'ananya@example.com'), 0, 'confirmed', v_staff_id
-    FROM court_slots cs JOIN courts c ON cs.court_id = c.id
-    WHERE c.name = 'Tennis Court 1' AND cs.start_time > NOW() + INTERVAL '5 days' AND cs.is_social = FALSE
-    ORDER BY cs.start_time OFFSET 10 LIMIT 1
+    SELECT id, (SELECT id FROM members WHERE email = 'ananya@example.com'), 0, 'confirmed', v_staff_id
+    FROM (
+        SELECT cs.id, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+        FROM court_slots cs JOIN courts c ON cs.court_id = c.id
+        WHERE c.name = 'Tennis Court 1' AND cs.start_time > NOW() + INTERVAL '5 days' AND cs.is_social = FALSE
+    ) sub WHERE rn % 2 = 1
+    OFFSET 5 LIMIT 1
     ON CONFLICT DO NOTHING;
 
     INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
-    SELECT cs.id, (SELECT id FROM members WHERE email = 'kavitha@example.com'), 0, 'confirmed', v_staff_id
-    FROM court_slots cs JOIN courts c ON cs.court_id = c.id
-    WHERE c.name = 'Tennis Court 2' AND cs.start_time > NOW() + INTERVAL '4 days' AND cs.is_social = FALSE
-    ORDER BY cs.start_time OFFSET 8 LIMIT 1
+    SELECT id, (SELECT id FROM members WHERE email = 'kavitha@example.com'), 0, 'confirmed', v_staff_id
+    FROM (
+        SELECT cs.id, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+        FROM court_slots cs JOIN courts c ON cs.court_id = c.id
+        WHERE c.name = 'Tennis Court 2' AND cs.start_time > NOW() + INTERVAL '4 days' AND cs.is_social = FALSE
+    ) sub WHERE rn % 2 = 1
+    OFFSET 4 LIMIT 1
     ON CONFLICT DO NOTHING;
 
     INSERT INTO bookings (slot_id, member_id, price_charged, status, booked_by_staff_id)
-    SELECT cs.id, (SELECT id FROM members WHERE email = 'harish@example.com'), 200, 'confirmed', v_staff_id
-    FROM court_slots cs JOIN courts c ON cs.court_id = c.id
-    WHERE c.name = 'Cricket Net 1' AND cs.start_time > NOW() + INTERVAL '3 days' AND cs.is_social = FALSE
-    ORDER BY cs.start_time OFFSET 6 LIMIT 1
+    SELECT id, (SELECT id FROM members WHERE email = 'harish@example.com'), 200, 'confirmed', v_staff_id
+    FROM (
+        SELECT cs.id, ROW_NUMBER() OVER (ORDER BY cs.start_time) AS rn
+        FROM court_slots cs JOIN courts c ON cs.court_id = c.id
+        WHERE c.name = 'Cricket Net 1' AND cs.start_time > NOW() + INTERVAL '3 days' AND cs.is_social = FALSE
+    ) sub WHERE rn % 2 = 1
+    OFFSET 3 LIMIT 1
     ON CONFLICT DO NOTHING;
 END;
 $$;
+
+-- Re-enable the double-booking trigger
+ALTER TABLE bookings ENABLE TRIGGER trg_bookings_prevent_double;
 
 
 -- =============================================================================
